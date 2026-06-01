@@ -142,7 +142,9 @@ public class Expedition2Good : BaseSettingsPlugin<Expedition2GoodSettings>
             {
                 var optionRect = option.GetClientRectCache;
                 var bounds = GetVisibleBounds(option, windowRect);
-                if (!Intersects(bounds, optionRect) || !Contains(bounds, optionRect.TopLeft))
+                if (!IsDrawableRect(optionRect) ||
+                    !bounds.Intersects(optionRect) ||
+                    !bounds.Contains(optionRect.TopLeft))
                 {
                     continue;
                 }
@@ -167,23 +169,13 @@ public class Expedition2Good : BaseSettingsPlugin<Expedition2GoodSettings>
         return rect.Width > 1 && rect.Height > 1;
     }
 
-    private static bool Intersects(RectangleF a, RectangleF b)
-    {
-        return IsDrawableRect(b) && a.Left < b.Right && a.Right > b.Left && a.Top < b.Bottom && a.Bottom > b.Top;
-    }
-
-    private static bool Contains(RectangleF rect, Vector2 point)
-    {
-        return point.X >= rect.Left && point.X <= rect.Right && point.Y >= rect.Top && point.Y <= rect.Bottom;
-    }
-
     private static RectangleF GetVisibleBounds(Element element, RectangleF fallbackBounds)
     {
         var bounds = fallbackBounds;
         for (var parent = element.Parent; parent is { IsValid: true }; parent = parent.Parent)
         {
             var parentRect = parent.GetClientRectCache;
-            if (IsDrawableRect(parentRect) && Intersects(bounds, parentRect))
+            if (IsDrawableRect(parentRect) && bounds.Intersects(parentRect))
             {
                 bounds = Intersect(bounds, parentRect);
             }

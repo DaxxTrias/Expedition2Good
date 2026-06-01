@@ -17,6 +17,7 @@ namespace Expedition2Good;
 public class Expedition2Good : BaseSettingsPlugin<Expedition2GoodSettings>
 {
     private const string ExpeditionEncounterMetadataPrefix = "Metadata/MiscellaneousObjects/Expedition2/Expedition2Encounter";
+    private const float RuneTooltipTextOffsetLines = 1.75f;
     private readonly TimeCache<Dictionary<Expedition2Recipe, (double, bool)>> _price;
     private static readonly (double, bool) NoPrice = (0, false);
 
@@ -84,7 +85,7 @@ public class Expedition2Good : BaseSettingsPlugin<Expedition2GoodSettings>
                         .Where(x => x.Runes.ElementAtOrDefault(label.FixedRunePosition)?.Equals(label.FixedRune) == true)
                         .Select(x => (x, value: GetPriceOrDefault(x))).OrderByDescending(x => x.value.Item1).ToList();
                     var bottomLeft = textBounds.ClampVector(labelRect.BottomLeft);
-                    var y = bottomLeft.Y;
+                    var y = bottomLeft.Y + Graphics.MeasureText("0.00").Y * RuneTooltipTextOffsetLines;
 
                     var first = true;
                     foreach (var (recipe, (value, overridden)) in recipes)

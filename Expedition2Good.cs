@@ -8,6 +8,7 @@ using ExileCore2.PoEMemory.FilesInMemory;
 using ExileCore2.PoEMemory.Models;
 using ExileCore2.Shared.Cache;
 using ExileCore2.Shared.Helpers;
+using RectangleF = ExileCore2.Shared.RectangleF;
 using Vector2 = System.Numerics.Vector2;
 
 namespace Expedition2Good;
@@ -107,6 +108,12 @@ public class Expedition2Good : BaseSettingsPlugin<Expedition2GoodSettings>
 
         if (GameController.IngameState.IngameUi.Expedition2Window is { IsVisible: true } expedition2Window)
         {
+            var windowRect = expedition2Window.GetClientRectCache;
+            if (!IsDrawableRect(windowRect))
+            {
+                return;
+            }
+
             var options = expedition2Window.Options
                 .Where(x => x?.Recipe != null)
                 .Select(x => (x, GetPriceOrDefault(x.Recipe)))
@@ -115,8 +122,17 @@ public class Expedition2Good : BaseSettingsPlugin<Expedition2GoodSettings>
             var first = true;
             foreach (var (option, (value, overridden)) in options)
             {
+                var optionRect = option.GetClientRectCache;
+                if (!Intersects(windowRect, optionRect))
+                {
+                    continue;
+                }
+
+                var text = $"{(overridden ? "~" : "")}{value,7:F2}";
+                var textSize = Graphics.MeasureText(text);
+                var position = ClampTextPosition(optionRect.TopLeft, textSize, windowRect);
                 var textColor = first ? Settings.TopPickColor : value >= Settings.ValuableColorThreshold ? Settings.ValuableTextColor : Settings.TextColor;
-                Graphics.DrawTextWithBackground($"{(overridden ? "~" : "")}{value,7:F2}", option.GetClientRectCache.TopLeft, textColor, Color.Black);
+                Graphics.DrawTextWithBackground(text, position, textColor, Color.Black);
                 first = false;
             }
         }
@@ -125,5 +141,22 @@ public class Expedition2Good : BaseSettingsPlugin<Expedition2GoodSettings>
     private (double, bool) GetPriceOrDefault(Expedition2Recipe recipe)
     {
         return recipe != null && _price.Value.TryGetValue(recipe, out var price) ? price : NoPrice;
+    }
+
+    private static bool IsDrawableRect(RectangleF rect)
+    {
+        return rect.Width > 1 && rect.Height > 1;
+    }
+
+    private static bool Intersects(RectangleF a, RectangleF b)
+    {
+        return IsDrawableRect(b) && a.Left < b.Right && a.Right > b.Left && a.Top < b.Bottom && a.Bottom > b.Top;
+    }
+
+    private static Vector2 ClampTextPosition(Vector2 position, Vector2 textSize, RectangleF bounds)
+    {
+        var maxX = Math.Max(bounds.Left, bounds.Right - textSize.X);
+        var maxY = Math.Max(bounds.Top, bounds.Bottom - textSize.Y);
+        return new Vector2(Math.Clamp(position.X, bounds.Left, maxX), Math.Clamp(position.Y, bounds.Top, maxY));
     }
 }

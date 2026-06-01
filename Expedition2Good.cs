@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Drawing;
 using System.Linq;
@@ -16,6 +16,7 @@ public class Expedition2Good : BaseSettingsPlugin<Expedition2GoodSettings>
 {
     private readonly TimeCache<List<(LabelOnGround, Expedition2EncounterLabel)>> _labels;
     private readonly TimeCache<Dictionary<Expedition2Recipe, (double, bool)>> _price;
+    private static readonly (double, bool) NoPrice = (0, false);
 
     public Expedition2Good()
     {
@@ -69,19 +70,18 @@ public class Expedition2Good : BaseSettingsPlugin<Expedition2GoodSettings>
 
     public override void Render()
     {
-        var getCurrencyValue = GameController.PluginBridge.GetMethod<Func<BaseItemType, double>>("NinjaPrice.GetBaseItemTypeValue") ?? (_ => 0);
         if (_labels.Value is { Count: > 0 } labels)
         {
             var allRecipes = GameController.Files.Expedition2Recipes.EntriesList.ToLookup(x => x.RuneCountRequired);
             if (allRecipes.Count > 0)
             {
                 var renderRect = (GameController.Window.GetWindowRectangle() with { Location = Vector2.Zero }).Inflated(-200, -100);
-                foreach (var (log, label) in labels)
+                foreach (var (_, label) in labels)
                 {
                     var recipes = allRecipes.Where(x => x.Key <= label.RuneCount)
                         .SelectMany(x => x)
                         .Where(x => x.Runes.ElementAtOrDefault(label.FixedRunePosition)?.Equals(label.FixedRune) == true)
-                        .Select(x => (x, value: _price.Value.GetValueOrDefault(x))).OrderByDescending(x => x.value).ToList();
+                        .Select(x => (x, value: GetPriceOrDefault(x))).OrderByDescending(x => x.value.Item1).ToList();
                     var bottomLeft = label.GetClientRect().BottomLeft;
                     bottomLeft = renderRect.ClampVector(bottomLeft);
                     var y = bottomLeft.Y;
@@ -107,15 +107,23 @@ public class Expedition2Good : BaseSettingsPlugin<Expedition2GoodSettings>
 
         if (GameController.IngameState.IngameUi.Expedition2Window is { IsVisible: true } expedition2Window)
         {
-            var options = expedition2Window.Options.Select(x => (x, _price.Value.GetValueOrDefault(x.Recipe))).OrderByDescending(x => x.Item2.Item1).ToList();
+            var options = expedition2Window.Options
+                .Where(x => x?.Recipe != null)
+                .Select(x => (x, GetPriceOrDefault(x.Recipe)))
+                .OrderByDescending(x => x.Item2.Item1)
+                .ToList();
             var first = true;
             foreach (var (option, (value, overridden)) in options)
             {
                 var textColor = first ? Settings.TopPickColor : value >= Settings.ValuableColorThreshold ? Settings.ValuableTextColor : Settings.TextColor;
-                var recipe = option.Recipe;
                 Graphics.DrawTextWithBackground($"{(overridden ? "~" : "")}{value,7:F2}", option.GetClientRectCache.TopLeft, textColor, Color.Black);
                 first = false;
             }
         }
+    }
+
+    private (double, bool) GetPriceOrDefault(Expedition2Recipe recipe)
+    {
+        return recipe != null && _price.Value.TryGetValue(recipe, out var price) ? price : NoPrice;
     }
 }

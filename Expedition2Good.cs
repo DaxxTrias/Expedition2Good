@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Drawing;
 using System.Linq;
 using ExileCore2;
+using ExileCore2.PoEMemory;
 using ExileCore2.PoEMemory.Elements;
 using ExileCore2.PoEMemory.FilesInMemory;
 using ExileCore2.PoEMemory.Models;
@@ -113,7 +114,7 @@ public class Expedition2Good : BaseSettingsPlugin<Expedition2GoodSettings>
             }
 
             var options = expedition2Window.Options
-                .Where(x => x?.Recipe != null)
+                .Where(x => x is { IsValid: true, IsVisible: true, IsVisibleLocal: true, Recipe: not null })
                 .Select(x => (x, GetPriceOrDefault(x.Recipe)))
                 .OrderByDescending(x => x.Item2.Item1)
                 .ToList();
@@ -121,14 +122,15 @@ public class Expedition2Good : BaseSettingsPlugin<Expedition2GoodSettings>
             foreach (var (option, (value, overridden)) in options)
             {
                 var optionRect = option.GetClientRectCache;
-                if (!Intersects(windowRect, optionRect))
+                var bounds = GetVisibleBounds(option, windowRect);
+                if (!Intersects(bounds, optionRect) || !Contains(bounds, optionRect.TopLeft))
                 {
                     continue;
                 }
 
                 var text = $"{(overridden ? "~" : "")}{value,7:F2}";
                 var textSize = Graphics.MeasureText(text);
-                var position = ClampTextPosition(optionRect.TopLeft, textSize, windowRect);
+                var position = ClampTextPosition(optionRect.TopLeft, textSize, bounds);
                 var textColor = first ? Settings.TopPickColor : value >= Settings.ValuableColorThreshold ? Settings.ValuableTextColor : Settings.TextColor;
                 Graphics.DrawTextWithBackground(text, position, textColor, Color.Black);
                 first = false;
@@ -193,6 +195,35 @@ public class Expedition2Good : BaseSettingsPlugin<Expedition2GoodSettings>
     private static bool Intersects(RectangleF a, RectangleF b)
     {
         return IsDrawableRect(b) && a.Left < b.Right && a.Right > b.Left && a.Top < b.Bottom && a.Bottom > b.Top;
+    }
+
+    private static bool Contains(RectangleF rect, Vector2 point)
+    {
+        return point.X >= rect.Left && point.X <= rect.Right && point.Y >= rect.Top && point.Y <= rect.Bottom;
+    }
+
+    private static RectangleF GetVisibleBounds(Element element, RectangleF fallbackBounds)
+    {
+        var bounds = fallbackBounds;
+        for (var parent = element.Parent; parent is { IsValid: true }; parent = parent.Parent)
+        {
+            var parentRect = parent.GetClientRectCache;
+            if (IsDrawableRect(parentRect) && Intersects(bounds, parentRect))
+            {
+                bounds = Intersect(bounds, parentRect);
+            }
+        }
+
+        return bounds;
+    }
+
+    private static RectangleF Intersect(RectangleF a, RectangleF b)
+    {
+        var left = Math.Max(a.Left, b.Left);
+        var top = Math.Max(a.Top, b.Top);
+        var right = Math.Min(a.Right, b.Right);
+        var bottom = Math.Min(a.Bottom, b.Bottom);
+        return new RectangleF(left, top, Math.Max(0, right - left), Math.Max(0, bottom - top));
     }
 
     private static Vector2 ClampTextPosition(Vector2 position, Vector2 textSize, RectangleF bounds)

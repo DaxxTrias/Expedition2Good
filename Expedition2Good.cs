@@ -87,10 +87,18 @@ public class Expedition2Good : BaseSettingsPlugin<Expedition2GoodSettings>
                         continue;
                     }
 
+                    var allowedRuneCounts = GameController.Files.Expedition2RunesWeights.EntriesList.Where(x => x.RuneSlot - 1 == label.FixedRunePosition)
+                        .Where(x => x.Rune.Equals(label.FixedRune))
+                        .Where(x => x.Level <= GameController.IngameState.Data.CurrentAreaLevel)
+                        .Select(x => x.SlotCount)
+                        .ToHashSet();
                     var recipes = allRecipes.Where(x => x.Key <= label.RuneCount)
                         .SelectMany(x => x)
                         .Where(x => x.Runes.ElementAtOrDefault(label.FixedRunePosition)?.Equals(label.FixedRune) == true)
-                        .Select(x => (x, value: GetPriceOrDefault(x))).OrderByDescending(x => x.value.Item1).ToList();
+                        .Where(x => allowedRuneCounts.Contains(x.RuneCountRequired))
+                        .Select(x => (x, value: GetPriceOrDefault(x)))
+                        .OrderByDescending(x => x.value.Item1)
+                        .ToList();
                     if (Settings.MinimumValueToShow > 0)
                     {
                         recipes = recipes.Where(x => x.value.Item1 >= Settings.MinimumValueToShow).ToList();

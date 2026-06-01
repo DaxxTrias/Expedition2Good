@@ -15,20 +15,12 @@ namespace Expedition2Good;
 
 public class Expedition2Good : BaseSettingsPlugin<Expedition2GoodSettings>
 {
-    private readonly TimeCache<List<(LabelOnGround, Expedition2EncounterLabel)>> _labels;
+    private const string ExpeditionEncounterMetadataPrefix = "Metadata/MiscellaneousObjects/Expedition2/Expedition2Encounter";
     private readonly TimeCache<Dictionary<Expedition2Recipe, (double, bool)>> _price;
     private static readonly (double, bool) NoPrice = (0, false);
 
     public Expedition2Good()
     {
-        _labels = new TimeCache<List<(LabelOnGround, Expedition2EncounterLabel)>>(() =>
-                GameController.EntityListWrapper.Entities
-                    .Any(x => x.Metadata.StartsWith("Metadata/MiscellaneousObjects/Expedition2/Expedition2Encounter", StringComparison.Ordinal))
-                    ? GameController.IngameState.IngameUi.ItemsOnGroundLabelsVisible.Where(x =>
-                            x?.ItemOnGround?.Metadata?.StartsWith("Metadata/MiscellaneousObjects/Expedition2/Expedition2Encounter", StringComparison.Ordinal) == true)
-                        .Select(x => (x, x.Label.AsObject<Expedition2EncounterLabel>())).ToList()
-                    : []
-            , 1000);
         _price = new TimeCache<Dictionary<Expedition2Recipe, (double, bool)>>(() =>
         {
             var getCurrencyValue = GameController.PluginBridge.GetMethod<Func<BaseItemType, double>>("NinjaPrice.GetBaseItemTypeValue") ?? (_ => 0);
@@ -71,20 +63,26 @@ public class Expedition2Good : BaseSettingsPlugin<Expedition2GoodSettings>
 
     public override void Render()
     {
-        if (_labels.Value is { Count: > 0 } labels)
+        var labels = GetVisibleExpeditionLabels();
+        if (labels.Count > 0)
         {
             var allRecipes = GameController.Files.Expedition2Recipes.EntriesList.ToLookup(x => x.RuneCountRequired);
             if (allRecipes.Count > 0)
             {
-                var renderRect = (GameController.Window.GetWindowRectangle() with { Location = Vector2.Zero }).Inflated(-200, -100);
-                foreach (var (_, label) in labels)
+                var windowRect = GameController.Window.GetWindowRectangle() with { Location = Vector2.Zero };
+                var textBounds = windowRect.Inflated(-200, -100);
+                foreach (var (labelOnGround, label) in labels)
                 {
+                    if (!TryGetDrawableLabelRect(labelOnGround, label, windowRect, out var labelRect))
+                    {
+                        continue;
+                    }
+
                     var recipes = allRecipes.Where(x => x.Key <= label.RuneCount)
                         .SelectMany(x => x)
                         .Where(x => x.Runes.ElementAtOrDefault(label.FixedRunePosition)?.Equals(label.FixedRune) == true)
                         .Select(x => (x, value: GetPriceOrDefault(x))).OrderByDescending(x => x.value.Item1).ToList();
-                    var bottomLeft = label.GetClientRect().BottomLeft;
-                    bottomLeft = renderRect.ClampVector(bottomLeft);
+                    var bottomLeft = textBounds.ClampVector(labelRect.BottomLeft);
                     var y = bottomLeft.Y;
 
                     var first = true;
@@ -138,9 +136,53 @@ public class Expedition2Good : BaseSettingsPlugin<Expedition2GoodSettings>
         }
     }
 
+    private List<(LabelOnGround LabelOnGround, Expedition2EncounterLabel Label)> GetVisibleExpeditionLabels()
+    {
+        var result = new List<(LabelOnGround, Expedition2EncounterLabel)>();
+        foreach (var labelOnGround in GameController.IngameState.IngameUi.ItemsOnGroundLabelsVisible)
+        {
+            if (labelOnGround == null)
+            {
+                continue;
+            }
+
+            var itemOnGround = labelOnGround.ItemOnGround;
+            if (itemOnGround?.Metadata?.StartsWith(ExpeditionEncounterMetadataPrefix, StringComparison.Ordinal) != true)
+            {
+                continue;
+            }
+
+            var labelElement = labelOnGround.Label;
+            if (labelElement?.IsVisible != true)
+            {
+                continue;
+            }
+
+            var encounterLabel = labelElement.AsObject<Expedition2EncounterLabel>();
+            if (encounterLabel?.IsVisible == true)
+            {
+                result.Add((labelOnGround, encounterLabel));
+            }
+        }
+
+        return result;
+    }
+
     private (double, bool) GetPriceOrDefault(Expedition2Recipe recipe)
     {
         return recipe != null && _price.Value.TryGetValue(recipe, out var price) ? price : NoPrice;
+    }
+
+    private static bool TryGetDrawableLabelRect(LabelOnGround labelOnGround, Expedition2EncounterLabel label, RectangleF bounds, out RectangleF labelRect)
+    {
+        labelRect = default;
+        if (!labelOnGround.IsVisible || !label.IsVisible)
+        {
+            return false;
+        }
+
+        labelRect = label.GetClientRect();
+        return IsDrawableRect(labelRect) && Intersects(bounds, labelRect);
     }
 
     private static bool IsDrawableRect(RectangleF rect)

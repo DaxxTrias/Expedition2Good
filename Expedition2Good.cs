@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Drawing;
 using System.Linq;
 using ExileCore2;
+using ExileCore2.PoEMemory.Components;
 using ExileCore2.PoEMemory.Elements;
 using ExileCore2.PoEMemory.FilesInMemory;
 using ExileCore2.PoEMemory.Models;
@@ -75,15 +76,31 @@ public class Expedition2Good : BaseSettingsPlugin<Expedition2GoodSettings>
             var allRecipes = GameController.Files.Expedition2Recipes.EntriesList.ToLookup(x => x.RuneCountRequired);
             if (allRecipes.Count > 0)
             {
-                var renderRect = (GameController.Window.GetWindowRectangle() with { Location = Vector2.Zero }).Inflated(-200, -100);
                 foreach (var (log, label) in labels)
                 {
+                    if (Settings.DisplayOnlyNonActivated &&
+                        log.ItemOnGround?.GetComponent<StateMachine>()?.States is { } states &&
+                        states.Any(s => s.Name == "activated" && ((int)s.Value == 6)))
+                    {
+                        continue;
+                    }
+
                     var recipes = allRecipes.Where(x => x.Key <= label.RuneCount)
                         .SelectMany(x => x)
                         .Where(x => x.Runes.ElementAtOrDefault(label.FixedRunePosition)?.Equals(label.FixedRune) == true)
                         .Select(x => (x, value: _price.Value.GetValueOrDefault(x))).OrderByDescending(x => x.value).ToList();
+                    if (Settings.MinimumValueToShow > 0)
+                    {
+                        recipes = recipes.Where(x => x.value.Item1 >= Settings.MinimumValueToShow).ToList();
+                    }
+
+                    if (Settings.MaxItemsToShow > 0)
+                    {
+                        recipes = recipes.Take(Settings.MaxItemsToShow).ToList();
+                    }
+
                     var bottomLeft = label.GetClientRect().BottomLeft;
-                    bottomLeft = renderRect.ClampVector(bottomLeft);
+                    bottomLeft += new Vector2(Settings.RenderOffsetX, Settings.RenderOffsetY);
                     var y = bottomLeft.Y;
 
                     var first = true;

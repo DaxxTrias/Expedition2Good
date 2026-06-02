@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Drawing;
 using System.Linq;
 using ExileCore2;
+using ExileCore2.PoEMemory.Components;
 using ExileCore2.PoEMemory;
 using ExileCore2.PoEMemory.Elements;
 using ExileCore2.PoEMemory.FilesInMemory;
@@ -17,12 +18,13 @@ namespace Expedition2Good;
 public class Expedition2Good : BaseSettingsPlugin<Expedition2GoodSettings>
 {
     private const string ExpeditionEncounterMetadataPrefix = "Metadata/MiscellaneousObjects/Expedition2/Expedition2Encounter";
-    private const float RuneTooltipTextOffsetLines = 1.75f;
+    private readonly TimeCache<List<(LabelOnGround LabelOnGround, Expedition2EncounterLabel Label)>> _labels;
     private readonly TimeCache<Dictionary<Expedition2Recipe, (double, bool)>> _price;
     private static readonly (double, bool) NoPrice = (0, false);
 
     public Expedition2Good()
     {
+        _labels = new TimeCache<List<(LabelOnGround LabelOnGround, Expedition2EncounterLabel Label)>>(GetVisibleExpeditionLabels, 1000);
         _price = new TimeCache<Dictionary<Expedition2Recipe, (double, bool)>>(() =>
         {
             var getCurrencyValue = GameController.PluginBridge.GetMethod<Func<BaseItemType, double>>("NinjaPrice.GetBaseItemTypeValue") ?? (_ => 0);
@@ -65,31 +67,61 @@ public class Expedition2Good : BaseSettingsPlugin<Expedition2GoodSettings>
 
     public override void Render()
     {
-        var labels = GetVisibleExpeditionLabels();
-        if (labels.Count > 0)
+        if (_labels.Value is { Count: > 0 } labels)
         {
             var allRecipes = GameController.Files.Expedition2Recipes.EntriesList.ToLookup(x => x.RuneCountRequired);
             if (allRecipes.Count > 0)
             {
                 var windowRect = GameController.Window.GetWindowRectangle() with { Location = Vector2.Zero };
                 var textBounds = windowRect.Inflated(-200, -100);
+                var areaLevel = GameController.IngameState.Data.CurrentAreaLevel;
+                var expedition2RunesWeights = GameController.Files.Expedition2RunesWeights.EntriesList;
                 foreach (var (labelOnGround, label) in labels)
                 {
-                    if (!TryGetDrawableLabelRect(labelOnGround, label, windowRect, out var labelRect))
+                    var entity = labelOnGround.ItemOnGround;
+                    if (entity == null ||
+                        !TryGetDrawableLabelRect(labelOnGround, label, windowRect, out var labelRect) ||
+                        Settings.DisplayOnlyNonActivated &&
+                        entity.GetComponent<StateMachine>()?.States is { } states &&
+                        states.Any(s => s.Name == "activated" && ((int)s.Value == 6)))
                     {
                         continue;
                     }
 
+                    var allowedRuneCounts = expedition2RunesWeights.Where(x => x.RuneSlot - 1 == label.FixedRunePosition)
+                        .Where(x => x.Rune.Equals(label.FixedRune))
+                        .Where(x => x.Level <= areaLevel)
+                        .Select(x => x.SlotCount)
+                        .ToHashSet();
                     var recipes = allRecipes.Where(x => x.Key <= label.RuneCount)
                         .SelectMany(x => x)
+                        .Where(x => allowedRuneCounts.Contains(x.RuneCountRequired))
+                        .Where(x => x.MinLevelReq <= areaLevel && x.MaxLevelReq >= areaLevel)
                         .Where(x => x.Runes.ElementAtOrDefault(label.FixedRunePosition)?.Equals(label.FixedRune) == true)
-                        .Select(x => (x, value: GetPriceOrDefault(x))).OrderByDescending(x => x.value.Item1).ToList();
-                    var bottomLeft = textBounds.ClampVector(labelRect.BottomLeft);
-                    var y = bottomLeft.Y + Graphics.MeasureText("0.00").Y * RuneTooltipTextOffsetLines;
+                        .Select(x => (x, value: GetPriceOrDefault(x)))
+                        .OrderByDescending(x => x.value.Item1)
+                        .ToList();
+                    if (Settings.MinimumValueToShow > 0)
+                    {
+                        recipes = recipes.Where(x => x.value.Item1 >= Settings.MinimumValueToShow).ToList();
+                    }
+
+                    if (Settings.MaxItemsToShow > 0)
+                    {
+                        recipes = recipes.Take(Settings.MaxItemsToShow).ToList();
+                    }
+
+                    var bottomLeft = textBounds.ClampVector(labelRect.BottomLeft + new Vector2(Settings.RenderOffsetX, Settings.RenderOffsetY));
+                    var y = bottomLeft.Y;
 
                     var first = true;
                     foreach (var (recipe, (value, overridden)) in recipes)
                     {
+                        if (first && Settings.ShowOnMinimap)
+                        {
+                            Graphics.DrawTextWithBackground($"Rune {(overridden ? "~" : "")}{value:F1}", Graphics.GridToMap(entity.GridPos, entity.GridPos), Color.Black);
+                        }
+
                         var textColor = first ? Settings.TopPickColor : value >= Settings.ValuableColorThreshold ? Settings.ValuableTextColor : Settings.TextColor;
                         var size = Graphics.DrawTextWithBackground(
                             $"{(overridden ? "~" : "")}{value,7:F2} {(string.IsNullOrWhiteSpace(recipe.Description) ? recipe.Reward?.BaseName : recipe.Description)} x{recipe.RewardCount}",
@@ -97,6 +129,7 @@ public class Expedition2Good : BaseSettingsPlugin<Expedition2GoodSettings>
                             textColor, Color.Black);
                         y += size.Y;
                         first = false;
+
                     }
 
                     //GameController.InspectObject(recipes, "Recipes");
@@ -124,7 +157,9 @@ public class Expedition2Good : BaseSettingsPlugin<Expedition2GoodSettings>
             {
                 var optionRect = option.GetClientRectCache;
                 var bounds = GetVisibleBounds(option, windowRect);
-                if (!Intersects(bounds, optionRect) || !Contains(bounds, optionRect.TopLeft))
+                if (!IsDrawableRect(optionRect) ||
+                    !bounds.Intersects(optionRect) ||
+                    !bounds.Contains(optionRect.TopLeft))
                 {
                     continue;
                 }
@@ -141,6 +176,11 @@ public class Expedition2Good : BaseSettingsPlugin<Expedition2GoodSettings>
 
     private List<(LabelOnGround LabelOnGround, Expedition2EncounterLabel Label)> GetVisibleExpeditionLabels()
     {
+        if (!GameController.EntityListWrapper.Entities.Any(x => x.Metadata?.StartsWith(ExpeditionEncounterMetadataPrefix, StringComparison.Ordinal) == true))
+        {
+            return [];
+        }
+
         var result = new List<(LabelOnGround, Expedition2EncounterLabel)>();
         foreach (var labelOnGround in GameController.IngameState.IngameUi.ItemsOnGroundLabelsVisible)
         {
@@ -185,22 +225,12 @@ public class Expedition2Good : BaseSettingsPlugin<Expedition2GoodSettings>
         }
 
         labelRect = label.GetClientRect();
-        return IsDrawableRect(labelRect) && Intersects(bounds, labelRect);
+        return IsDrawableRect(labelRect) && bounds.Intersects(labelRect);
     }
 
     private static bool IsDrawableRect(RectangleF rect)
     {
         return rect.Width > 1 && rect.Height > 1;
-    }
-
-    private static bool Intersects(RectangleF a, RectangleF b)
-    {
-        return IsDrawableRect(b) && a.Left < b.Right && a.Right > b.Left && a.Top < b.Bottom && a.Bottom > b.Top;
-    }
-
-    private static bool Contains(RectangleF rect, Vector2 point)
-    {
-        return point.X >= rect.Left && point.X <= rect.Right && point.Y >= rect.Top && point.Y <= rect.Bottom;
     }
 
     private static RectangleF GetVisibleBounds(Element element, RectangleF fallbackBounds)
@@ -209,7 +239,7 @@ public class Expedition2Good : BaseSettingsPlugin<Expedition2GoodSettings>
         for (var parent = element.Parent; parent is { IsValid: true }; parent = parent.Parent)
         {
             var parentRect = parent.GetClientRectCache;
-            if (IsDrawableRect(parentRect) && Intersects(bounds, parentRect))
+            if (IsDrawableRect(parentRect) && bounds.Intersects(parentRect))
             {
                 bounds = Intersect(bounds, parentRect);
             }

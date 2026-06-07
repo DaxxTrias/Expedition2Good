@@ -9,6 +9,7 @@ using ExileCore2.PoEMemory.Elements;
 using ExileCore2.PoEMemory.FilesInMemory;
 using ExileCore2.PoEMemory.Models;
 using ExileCore2.Shared.Cache;
+using ExileCore2.Shared.Enums;
 using ExileCore2.Shared.Helpers;
 using RectangleF = ExileCore2.Shared.RectangleF;
 using Vector2 = System.Numerics.Vector2;
@@ -68,6 +69,9 @@ public class Expedition2Good : BaseSettingsPlugin<Expedition2GoodSettings>
 
     public override void Render()
     {
+        var entities = GameController.EntityListWrapper.ValidEntitiesByType[EntityType.IngameIcon]
+            .Where(x => x.Metadata.StartsWith("Metadata/MiscellaneousObjects/Expedition2/Expedition2Encounter", StringComparison.Ordinal)).ToList();
+
         if (_labels.Value is { Count: > 0 } labels)
         {
             var allRecipes = GameController.Files.Expedition2Recipes.EntriesList.ToLookup(x => x.RuneCountRequired);
@@ -80,17 +84,19 @@ public class Expedition2Good : BaseSettingsPlugin<Expedition2GoodSettings>
                 foreach (var (labelOnGround, label) in labels)
                 {
                     var entity = labelOnGround.ItemOnGround;
+                    var states = entity?.GetComponent<StateMachine>()?.States;
                     if (entity == null ||
                         !TryGetDrawableLabelRect(labelOnGround, label, windowRect, out var labelRect) ||
                         Settings.DisplayOnlyNonActivated &&
-                        entity.GetComponent<StateMachine>()?.States is { } states &&
+                        states != null &&
                         states.Any(s => s.Name == "activated" && ((int)s.Value == 6)))
                     {
                         continue;
                     }
 
+                    entities.Remove(entity);
                     var allowedRuneCounts = expedition2RunesWeights.Where(x => x.RuneSlot - 1 == label.FixedRunePosition)
-                        .Where(x => x.Rune.Equals(label.FixedRune))
+                        .Where(x => x.Rune?.Equals(label?.FixedRune) == true)
                         .Where(x => x.Level <= areaLevel)
                         .Select(x => x.SlotCount)
                         .ToHashSet();
@@ -120,7 +126,9 @@ public class Expedition2Good : BaseSettingsPlugin<Expedition2GoodSettings>
                     {
                         if (first && Settings.ShowOnMinimap)
                         {
-                            Graphics.DrawTextWithBackground($"Rune {(overridden ? "~" : "")}{value:F1}", Graphics.GridToMap(entity.GridPos, entity.GridPos), Color.Black);
+                            var color = value >= Settings.ValuableColorThreshold ? Settings.ValuableTextColor : Settings.TextColor;
+                            Graphics.DrawTextWithBackground($"Rune {(overridden ? "~" : "")}{value:F1} ({label.RuneCount} sockets)",
+                                Graphics.GridToMap(entity.GridPos, entity.GridPos), color, Color.Black);
                         }
 
                         var textColor = first ? Settings.TopPickColor : value >= Settings.ValuableColorThreshold ? Settings.ValuableTextColor : Settings.TextColor;
@@ -130,7 +138,6 @@ public class Expedition2Good : BaseSettingsPlugin<Expedition2GoodSettings>
                             textColor, Color.Black);
                         y += size.Y;
                         first = false;
-
                     }
 
                     //GameController.InspectObject(recipes, "Recipes");
@@ -138,6 +145,19 @@ public class Expedition2Good : BaseSettingsPlugin<Expedition2GoodSettings>
             }
 
             //GameController.InspectObject(labels, "Labels");
+        }
+
+        if (Settings.ShowOnMinimap)
+        {
+            foreach (var entity in entities)
+            {
+                var states = entity?.GetComponent<StateMachine>()?.States;
+                var runeCount = states?.FirstOrDefault(x => x.Name == "sockets")?.Value;
+                if (runeCount != null)
+                {
+                    Graphics.DrawTextWithBackground($"Unknown rune {runeCount} sockets", Graphics.GridToMap(entity.GridPos, entity.GridPos), Color.Black);
+                }
+            }
         }
 
         if (GameController.IngameState.IngameUi.Expedition2Window is { IsVisible: true } expedition2Window)
@@ -157,7 +177,7 @@ public class Expedition2Good : BaseSettingsPlugin<Expedition2GoodSettings>
             foreach (var (option, (value, overridden)) in options)
             {
                 var optionRect = option.GetClientRectCache;
-                var bounds = GetVisibleBounds(option, windowRect);
+                var bounds = windowRect;
                 if (!IsDrawableRect(optionRect) ||
                     !bounds.Intersects(optionRect) ||
                     !bounds.Contains(optionRect.TopLeft))
@@ -165,11 +185,12 @@ public class Expedition2Good : BaseSettingsPlugin<Expedition2GoodSettings>
                     continue;
                 }
 
-                var text = $"{(overridden ? "~" : "")}{value,7:F2}";
+                var text = $"{(overridden ? "~" : "")}{value,5:F2}";
                 var textSize = Graphics.MeasureText(text);
-                var position = ClampTextPosition(optionRect.TopLeft, textSize, bounds);
+                var position = ClampTextPosition(optionRect.TopRight, textSize, bounds);
                 var textColor = first ? Settings.TopPickColor : value >= Settings.ValuableColorThreshold ? Settings.ValuableTextColor : Settings.TextColor;
                 Graphics.DrawTextWithBackground(text, position, textColor, Color.Black);
+                Graphics.DrawLine(optionRect.TopRight.Translate(-3, 0), optionRect.BottomRight.Translate(-3, 0), 5, textColor);
                 first = false;
             }
         }
